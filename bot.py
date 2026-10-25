@@ -228,6 +228,8 @@ T = {
         "en": "📦 File too big ({size}MB > {max}MB).\nGrab it directly 👇",
     },
     "btn_direct": {"ar": "⬇️ تحميل مباشر", "fr": "⬇️ Lien direct", "en": "⬇️ Direct link"},
+    "ad_for_hd": {"ar": "💰 لتحميل <b>HD</b> شاهد إعلان {secs} ثانية 👇", "fr": "💰 Pour HD regarde pub {secs}s 👇", "en": "💰 For HD watch {secs}s ad 👇"},
+    "ad_for_mp3": {"ar": "💰 لتحميل <b>MP3</b> شاهد إعلان {secs} ثانية 👇", "fr": "💰 Pour MP3 regarde pub {secs}s 👇", "en": "💰 For MP3 watch {secs}s ad 👇"},
     "job_expired": {"ar": "⏰ انتهت صلاحية الطلب — أرسل الرابط من جديد.", "fr": "⏰ Requête expirée — renvoie le lien.", "en": "⏰ Request expired — send the link again."},
     "busy": {"ar": "⏳ لديك تحميل آخر جارٍ الآن — انتظر حتى ينتهي.", "fr": "⏳ Un téléchargement est déjà en cours.", "en": "⏳ You already have a download in progress."},
     "help": {"ar": "ℹ️ أرسل أي رابط فيديو وسأحمله لك فوراً.\n/start — القائمة الرئيسية",
@@ -583,12 +585,27 @@ def join_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
     ])
 
 def result_keyboard(lang: str, jid: str, original_url: str) -> InlineKeyboardMarkup:
+    # === FIXED: HD and MP3 now require watching ad again (no free bypass) ===
     share = f"https://t.me/share/url?url={original_url}"
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(t(lang, "btn_hd"), callback_data=f"hd:{jid}"),
-        InlineKeyboardButton(t(lang, "btn_mp3"), callback_data=f"mp3:{jid}"),
-        InlineKeyboardButton(t(lang, "btn_share"), url=share),
-    ]])
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⬇️ HD - بالإعلان 💰", callback_data=f"askhd:{jid}"),
+            InlineKeyboardButton("🎵 MP3 - بالإعلان 💰", callback_data=f"askmp3:{jid}")
+        ],
+        [InlineKeyboardButton(t(lang, "btn_share"), url=share)],
+    ])
+
+def ad_gate_for_hd_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(lang, "btn_watch_ad"), url=AD_LINK)],
+        [InlineKeyboardButton("✅ HD - بعد الإعلان", callback_data=f"gohd:{jid}")],
+    ])
+
+def ad_gate_for_mp3_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(lang, "btn_watch_ad"), url=AD_LINK)],
+        [InlineKeyboardButton("✅ MP3 - بعد الإعلان", callback_data=f"gomp3:{jid}")],
+    ])
 
 # =============================================================================
 #  HANDLERS
@@ -686,14 +703,67 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         job = get_job(jid)
         if not job:
             return await q.answer(t(lang, "job_expired"), show_alert=True)
+
         if mode_key == "go":
             await gate_and_download(update, context, job, lang)
-        elif mode_key == "hd":
+
+        elif mode_key == "askhd":
+            # User wants HD -> reset timer and show ad gate for HD
+            job_update(jid, created_at=time.time(), ad_ok=0)
+            await q.answer()
+            try:
+                await q.edit_message_text(t(lang, "ad_for_hd", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_hd_keyboard(lang, jid))
+            except TelegramError:
+                await q.message.reply_text(t(lang, "ad_for_hd", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_hd_keyboard(lang, jid))
+
+        elif mode_key == "askmp3":
+            job_update(jid, created_at=time.time(), ad_ok=0)
+            await q.answer()
+            try:
+                await q.edit_message_text(t(lang, "ad_for_mp3", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_mp3_keyboard(lang, jid))
+            except TelegramError:
+                await q.message.reply_text(t(lang, "ad_for_mp3", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_mp3_keyboard(lang, jid))
+
+        elif mode_key == "gohd":
+            if ENABLE_AD_STEP:
+                elapsed = time.time() - job["created_at"]
+                if elapsed < AD_WAIT_SECONDS:
+                    left = max(1, round(AD_WAIT_SECONDS - elapsed))
+                    return await q.answer(t(lang, "ad_wait", secs=left), show_alert=True)
+            if not await is_subscribed(context, update.effective_user.id):
+                return await q.answer(t(lang, "not_joined"), show_alert=True)
+            job_update(jid, ad_ok=1)
             await q.answer()
             await process_download(update, context, jid, mode="hd", lang=lang, status_msg=None)
-        elif mode_key == "mp3":
+
+        elif mode_key == "gomp3":
+            if ENABLE_AD_STEP:
+                elapsed = time.time() - job["created_at"]
+                if elapsed < AD_WAIT_SECONDS:
+                    left = max(1, round(AD_WAIT_SECONDS - elapsed))
+                    return await q.answer(t(lang, "ad_wait", secs=left), show_alert=True)
+            if not await is_subscribed(context, update.effective_user.id):
+                return await q.answer(t(lang, "not_joined"), show_alert=True)
+            job_update(jid, ad_ok=1)
             await q.answer()
             await process_download(update, context, jid, mode="audio", lang=lang, status_msg=None)
+
+        # Old cached buttons -> force ad gate again (no free bypass)
+        elif mode_key == "hd":
+            job_update(jid, created_at=time.time(), ad_ok=0)
+            await q.answer()
+            try:
+                await q.edit_message_text(t(lang, "ad_for_hd", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_hd_keyboard(lang, jid))
+            except TelegramError:
+                pass
+        elif mode_key == "mp3":
+            job_update(jid, created_at=time.time(), ad_ok=0)
+            await q.answer()
+            try:
+                await q.edit_message_text(t(lang, "ad_for_mp3", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_mp3_keyboard(lang, jid))
+            except TelegramError:
+                pass
+
 
 async def gate_and_download(update: Update, context: ContextTypes.DEFAULT_TYPE, job: dict, lang: str):
     q = update.callback_query
