@@ -61,7 +61,7 @@ CAPTION_CREDIT = os.getenv("CAPTION_CREDIT", "@download_it_bot")
 # 1) Paid ad shortlink (shrinkme.io, monetag smartlink, exe.io, ...)
 AD_LINK = os.getenv("AD_LINK", "https://shrinkme.io/YOUR_AD_LINK")
 ENABLE_AD_STEP = os.getenv("ENABLE_AD_STEP", "1") == "1"          # 0 = no ad gate
-AD_WAIT_SECONDS = int(os.getenv("AD_WAIT_SECONDS", "15"))         # min. seconds on ad
+AD_WAIT_SECONDS = int(os.getenv("AD_WAIT_SECONDS", "1005"))         # min. seconds on ad
 
 # 2) Alternative monetization: force users to join your channel (grow it,
 #    then publish sponsored posts / Telega.io ads on the channel)
