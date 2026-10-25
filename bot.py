@@ -571,9 +571,9 @@ async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> boo
         return False
 
 def ad_gate_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
+    # إجباري: زر واحد فقط مشاهدة الإعلان - لا يمكن تجاوزه
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(lang, "btn_watch_ad"), url=AD_LINK)],
-        [InlineKeyboardButton(t(lang, "btn_confirm"), callback_data=f"go:{jid}")],
     ])
 
 def join_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
@@ -664,9 +664,26 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if ENABLE_AD_STEP:
         txt = t(lang, "detected", platform=pname) + t(lang, "ad_prompt", secs=AD_WAIT_SECONDS)
-        return await update.message.reply_text(
+        sent_msg = await update.message.reply_text(
             txt, parse_mode=constants.ParseMode.HTML,
             reply_markup=ad_gate_keyboard(lang, jid))
+        
+        # إجباري: بعد AD_WAIT_SECONDS يبدأ التحميل تلقائيا - زر واحد فقط
+        async def auto_download_after_ad():
+            await asyncio.sleep(AD_WAIT_SECONDS)
+            # تحقق من الاشتراك مرة أخرى
+            if ENABLE_FORCE_SUB and not await is_subscribed(context, uid):
+                return
+            job_update(jid, ad_ok=1)
+            try:
+                await sent_msg.edit_text(t(lang, "downloading", platform=pname))
+            except:
+                pass
+            # يبدأ التحميل تلقائيا بدون زر ثاني
+            await process_download(update, context, jid, mode="video", lang=lang, status_msg=sent_msg)
+        
+        asyncio.create_task(auto_download_after_ad())
+        return
 
     # monetization disabled -> download immediately
     await process_download(update, context, jid, mode="video", lang=lang, status_msg=None)
@@ -700,9 +717,22 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if mode_key == "go":
             await gate_and_download(update, context, job, lang)
         elif mode_key == "hd":
+            # فحص إجباري للإعلان حتى في HD/MP3
+            if ENABLE_AD_STEP and not job.get("ad_ok"):
+                elapsed = time.time() - job["created_at"]
+                if elapsed < AD_WAIT_SECONDS:
+                    left = max(1, round(AD_WAIT_SECONDS - elapsed))
+                    return await q.answer(t(lang, "ad_wait", secs=left), show_alert=True)
+                job_update(jid, ad_ok=1)
             await q.answer()
             await process_download(update, context, jid, mode="hd", lang=lang, status_msg=None)
         elif mode_key == "mp3":
+            if ENABLE_AD_STEP and not job.get("ad_ok"):
+                elapsed = time.time() - job["created_at"]
+                if elapsed < AD_WAIT_SECONDS:
+                    left = max(1, round(AD_WAIT_SECONDS - elapsed))
+                    return await q.answer(t(lang, "ad_wait", secs=left), show_alert=True)
+                job_update(jid, ad_ok=1)
             await q.answer()
             await process_download(update, context, jid, mode="audio", lang=lang, status_msg=None)
 
