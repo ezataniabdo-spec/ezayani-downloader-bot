@@ -61,7 +61,7 @@ CAPTION_CREDIT = os.getenv("CAPTION_CREDIT", "@download_it_bot")
 # 1) Paid ad shortlink (shrinkme.io, monetag smartlink, exe.io, ...)
 AD_LINK = os.getenv("AD_LINK", "https://shrinkme.io/YOUR_AD_LINK")
 ENABLE_AD_STEP = os.getenv("ENABLE_AD_STEP", "1") == "1"          # 0 = no ad gate
-AD_WAIT_SECONDS = int(os.getenv("AD_WAIT_SECONDS", "1005"))         # min. seconds on ad
+AD_WAIT_SECONDS = int(os.getenv("AD_WAIT_SECONDS", "10"))  # 10s mandatory - ad must be watched         # min. seconds on ad
 
 # 2) Alternative monetization: force users to join your channel (grow it,
 #    then publish sponsored posts / Telega.io ads on the channel)
@@ -573,8 +573,15 @@ async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> boo
         return False
 
 def ad_gate_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
+    # ONLY AD BUTTON - NO BYPASS BUTTON - Ad is mandatory
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(lang, "btn_watch_ad"), url=AD_LINK)],
+        [InlineKeyboardButton(t(lang, "btn_watch_ad", secs=AD_WAIT_SECONDS), url=AD_LINK)],
+    ])
+
+def ad_gate_keyboard_unlocked(lang: str, jid: str) -> InlineKeyboardMarkup:
+    # After waiting, show confirm - but ad was already mandatory
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(lang, "btn_watch_ad", secs=AD_WAIT_SECONDS), url=AD_LINK)],
         [InlineKeyboardButton(t(lang, "btn_confirm"), callback_data=f"go:{jid}")],
     ])
 
@@ -596,15 +603,26 @@ def result_keyboard(lang: str, jid: str, original_url: str) -> InlineKeyboardMar
     ])
 
 def ad_gate_for_hd_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
+    # HD - AD MANDATORY - only ad button first
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(lang, "btn_watch_ad"), url=AD_LINK)],
-        [InlineKeyboardButton("✅ HD - بعد الإعلان", callback_data=f"gohd:{jid}")],
+        [InlineKeyboardButton(f"💰 إعلان إجباري لـ HD ({AD_WAIT_SECONDS}ث) 👁️", url=AD_LINK)],
+    ])
+
+def ad_gate_for_hd_unlocked(lang: str, jid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"💰 إعلان HD", url=AD_LINK)],
+        [InlineKeyboardButton("✅ HD - بعد الإعلان 🔓", callback_data=f"gohd:{jid}")],
     ])
 
 def ad_gate_for_mp3_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(lang, "btn_watch_ad"), url=AD_LINK)],
-        [InlineKeyboardButton("✅ MP3 - بعد الإعلان", callback_data=f"gomp3:{jid}")],
+        [InlineKeyboardButton(f"💰 إعلان إجباري لـ MP3 ({AD_WAIT_SECONDS}ث) 👁️", url=AD_LINK)],
+    ])
+
+def ad_gate_for_mp3_unlocked(lang: str, jid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"💰 إعلان MP3", url=AD_LINK)],
+        [InlineKeyboardButton("✅ MP3 - بعد الإعلان 🔓", callback_data=f"gomp3:{jid}")],
     ])
 
 # =============================================================================
@@ -681,9 +699,21 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if ENABLE_AD_STEP:
         txt = t(lang, "detected", platform=pname) + t(lang, "ad_prompt", secs=AD_WAIT_SECONDS)
-        return await update.message.reply_text(
+        sent = await update.message.reply_text(
             txt, parse_mode=constants.ParseMode.HTML,
             reply_markup=ad_gate_keyboard(lang, jid))
+        # AUTO-UNLOCK after AD_WAIT_SECONDS - makes ad mandatory but no bypass button at first
+        # During this time user has ONLY ad button to click
+        await asyncio.sleep(AD_WAIT_SECONDS)
+        try:
+            await sent.edit_text(
+                txt + f"\n\n✅ <b>الآن اضغط تأكيد للتحميل</b>",
+                parse_mode=constants.ParseMode.HTML,
+                reply_markup=ad_gate_keyboard_unlocked(lang, jid)
+            )
+        except TelegramError:
+            pass
+        return
 
     # monetization disabled -> download immediately
     await process_download(update, context, jid, mode="video", lang=lang, status_msg=None)
@@ -708,21 +738,31 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await gate_and_download(update, context, job, lang)
 
         elif mode_key == "askhd":
-            # User wants HD -> reset timer and show ad gate for HD
+            # HD - Ad mandatory - only ad button first, then auto unlock
             job_update(jid, created_at=time.time(), ad_ok=0)
             await q.answer()
             try:
-                await q.edit_message_text(t(lang, "ad_for_hd", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_hd_keyboard(lang, jid))
+                sent = await q.edit_message_text(t(lang, "ad_for_hd", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_hd_keyboard(lang, jid))
             except TelegramError:
-                await q.message.reply_text(t(lang, "ad_for_hd", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_hd_keyboard(lang, jid))
+                sent = await q.message.reply_text(t(lang, "ad_for_hd", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_hd_keyboard(lang, jid))
+            await asyncio.sleep(AD_WAIT_SECONDS)
+            try:
+                await sent.edit_reply_markup(reply_markup=ad_gate_for_hd_unlocked(lang, jid))
+            except TelegramError:
+                pass
 
         elif mode_key == "askmp3":
             job_update(jid, created_at=time.time(), ad_ok=0)
             await q.answer()
             try:
-                await q.edit_message_text(t(lang, "ad_for_mp3", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_mp3_keyboard(lang, jid))
+                sent = await q.edit_message_text(t(lang, "ad_for_mp3", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_mp3_keyboard(lang, jid))
             except TelegramError:
-                await q.message.reply_text(t(lang, "ad_for_mp3", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_mp3_keyboard(lang, jid))
+                sent = await q.message.reply_text(t(lang, "ad_for_mp3", secs=AD_WAIT_SECONDS), parse_mode=constants.ParseMode.HTML, reply_markup=ad_gate_for_mp3_keyboard(lang, jid))
+            await asyncio.sleep(AD_WAIT_SECONDS)
+            try:
+                await sent.edit_reply_markup(reply_markup=ad_gate_for_mp3_unlocked(lang, jid))
+            except TelegramError:
+                pass
 
         elif mode_key == "gohd":
             if ENABLE_AD_STEP:
