@@ -686,6 +686,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         job = get_job(jid)
         if not job:
             return await q.answer(t(lang, "job_expired"), show_alert=True)
+        
+        # === FIX: الإعلان إجباري - لا يمكن تجاوز HD/MP3 بدون مشاهدة الإعلان ===
+        if mode_key in ("hd", "mp3") and ENABLE_AD_STEP:
+            if not job.get("ad_ok"):
+                elapsed = time.time() - job["created_at"]
+                if elapsed < AD_WAIT_SECONDS:
+                    left = max(1, round(AD_WAIT_SECONDS - elapsed))
+                    return await q.answer(t(lang, "ad_wait", secs=left), show_alert=True)
+                # لو انتظر الوقت كامل، نسمح له
+                job_update(jid, ad_ok=1)
+        
         if mode_key == "go":
             await gate_and_download(update, context, job, lang)
         elif mode_key == "hd":
