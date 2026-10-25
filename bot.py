@@ -61,7 +61,7 @@ CAPTION_CREDIT = os.getenv("CAPTION_CREDIT", "@download_it_bot")
 # 1) Paid ad shortlink (shrinkme.io, monetag smartlink, exe.io, ...)
 AD_LINK = os.getenv("AD_LINK", "https://shrinkme.io/YOUR_AD_LINK")
 ENABLE_AD_STEP = os.getenv("ENABLE_AD_STEP", "1") == "1"          # 0 = no ad gate
-AD_WAIT_SECONDS = int(os.getenv("AD_WAIT_SECONDS", "10"))  # Ad only first - 10s mandatory         # min. seconds on ad
+AD_WAIT_SECONDS = int(os.getenv("AD_WAIT_SECONDS", "10"))         # min. seconds on ad
 
 # 2) Alternative monetization: force users to join your channel (grow it,
 #    then publish sponsored posts / Telega.io ads on the channel)
@@ -573,8 +573,15 @@ async def is_subscribed(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> boo
         return False
 
 def ad_gate_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
+    # FIRST STEP ONLY - Ad mandatory, only ad button, no bypass
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(lang, "btn_watch_ad"), url=AD_LINK)],
+        [InlineKeyboardButton(t(lang, "btn_watch_ad", secs=AD_WAIT_SECONDS), url=AD_LINK)],
+    ])
+
+def ad_gate_keyboard_unlocked(lang: str, jid: str) -> InlineKeyboardMarkup:
+    # After wait, confirm appears
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(lang, "btn_watch_ad", secs=AD_WAIT_SECONDS), url=AD_LINK)],
         [InlineKeyboardButton(t(lang, "btn_confirm"), callback_data=f"go:{jid}")],
     ])
 
@@ -585,31 +592,29 @@ def join_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
     ])
 
 def result_keyboard(lang: str, jid: str, original_url: str) -> InlineKeyboardMarkup:
-    # === FIXED: HD and MP3 now require watching ad again (no free bypass) ===
+    # AFTER FIRST AD - HD and MP3 FREE DIRECT, NO AD
     share = f"https://t.me/share/url?url={original_url}"
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("⬇️ HD - بالإعلان 💰", callback_data=f"askhd:{jid}"),
-            InlineKeyboardButton("🎵 MP3 - بالإعلان 💰", callback_data=f"askmp3:{jid}")
+            InlineKeyboardButton("⬇️ تحميل HD", callback_data=f"hd:{jid}"),
+            InlineKeyboardButton("🎵 تحميل MP3", callback_data=f"mp3:{jid}")
         ],
         [InlineKeyboardButton(t(lang, "btn_share"), url=share)],
     ])
 
 def ad_gate_for_hd_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(lang, "btn_watch_ad"), url=AD_LINK)],
-        [InlineKeyboardButton("✅ HD - بعد الإعلان", callback_data=f"gohd:{jid}")],
-    ])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⬇️ تحميل HD", callback_data=f"hd:{jid}")]])
+
+def ad_gate_for_hd_unlocked(lang: str, jid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⬇️ تحميل HD", callback_data=f"hd:{jid}")]])
 
 def ad_gate_for_mp3_keyboard(lang: str, jid: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(lang, "btn_watch_ad"), url=AD_LINK)],
-        [InlineKeyboardButton("✅ MP3 - بعد الإعلان", callback_data=f"gomp3:{jid}")],
-    ])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🎵 تحميل MP3", callback_data=f"mp3:{jid}")]])
 
-# =============================================================================
-#  HANDLERS
-# =============================================================================
+def ad_gate_for_mp3_unlocked(lang: str, jid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🎵 تحميل MP3", callback_data=f"mp3:{jid}")]])
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(update.effective_user)
     lang = lang_of(update)
@@ -684,7 +689,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sent = await update.message.reply_text(
             txt, parse_mode=constants.ParseMode.HTML,
             reply_markup=ad_gate_keyboard(lang, jid))
-        # Auto-unlock after AD_WAIT_SECONDS - forces user to see ad button only first
         await asyncio.sleep(AD_WAIT_SECONDS)
         try:
             await sent.edit_text(
@@ -719,22 +723,18 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await gate_and_download(update, context, job, lang)
 
         elif mode_key == "hd":
-            # HD FREE - No ad needed after first ad
             await q.answer()
             await process_download(update, context, jid, mode="hd", lang=lang, status_msg=None)
 
         elif mode_key == "mp3":
-            # MP3 FREE - No ad needed after first ad
             await q.answer()
             await process_download(update, context, jid, mode="audio", lang=lang, status_msg=None)
 
         elif mode_key in ("askhd", "gohd"):
-            # Old buttons - now direct HD free
             await q.answer()
             await process_download(update, context, jid, mode="hd", lang=lang, status_msg=None)
 
         elif mode_key in ("askmp3", "gomp3"):
-            # Old buttons - now direct MP3 free
             await q.answer()
             await process_download(update, context, jid, mode="audio", lang=lang, status_msg=None)
 
